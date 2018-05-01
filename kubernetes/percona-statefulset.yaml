@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: percona-galera
+  name: percona-galera
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: percona-galera
+  serviceName: percona-galera
+  template:
+    metadata:
+      labels:
+        app: percona-galera
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - percona-galera
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: "remove-lost-found"
+          image: "busybox:1.25.0"
+          imagePullPolicy: IfNotPresent
+          command:
+          - "rm"
+          - "-fr"
+          - "/var/lib/mysql/lost+found"
+          volumeMounts:
+          - name: mysql-data
+            mountPath: /var/lib/mysql
+      containers:
+      - name: percona-galera
+        imagePullPolicy: IfNotPresent
+        image: percona/percona-xtradb-cluster:5.7.19
+        command: ["/bin/sh"]
+        args: ["-c", "/percona-scripts/entrypoint.sh"]
+        resources:
+            limits:
+              cpu: "100m"
+        env:
+        - name: CLUSTER_NAME
+          value: percona-galera
+        - name: MYSQL_ROOT_PASSWORD
+          value: hesloheslo
+        - name: MYSQL_DATABASE
+          value: testing
+        - name: XTRABACKUP_PASSWORD
+          value: hesloheslo 
+        - name: K8S_SERVICE_NAME
+          value: percona-galera-xtradb
+        - name: GALERA_UNSAFE_BOOTSTRAP
+          value: "true"
+        - name: LOG_TO_STDOUT
+          value: "true"
+        - name: RESTORE_FROM_BACKUP
+          value: "false"
+        - name: DEBUG
+          value: "true"
+        livenessProbe:
+          exec:
+            command: ["mysqladmin", "-p$(MYSQL_ROOT_PASSWORD)", "ping"]
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command: ["mysql", "-h", "127.0.0.1", "-p$(MYSQL_ROOT_PASSWORD)", "-e", "SELECT 1"]
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+        volumeMounts:
+          - name: mysql-data
+            mountPath: /var/lib/mysql
+          - name: percona-scripts
+            mountPath: /percona-scripts
+          # - name: backup-dir
+          #   mountPath: /backups
+      volumes:
+        # - name: backup-dir
+        #   persistentVolumeClaim:
+        #     claimName: backup-dir-pv-claim
+        - name: percona-scripts
+          configMap:
+            name: percona-scripts
+            defaultMode: 0744
+  volumeClaimTemplates:
+    - metadata:
+        name: mysql-data
+        #storageClassName: "" # Comment to enable dynamic provisioning of the pv
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
